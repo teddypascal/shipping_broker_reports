@@ -24,12 +24,14 @@ OUT_XLSX = SCRIPT_DIR / "Affinity_USG_All_Emails.xlsx"
 LOCAL_TZ = "Asia/Singapore"  # for Email Sent Date display
 
 HEADERS = ["Vessel", "Built", "CBM", "Control", "Position", "ETA USG", "Notes"]
+MONTH_MAP = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
+MONTH_MAP.update({m.lower(): i for i, m in enumerate(calendar.month_name) if m})
 
 
 # ----------------------------
 # MSG reading
 # ----------------------------
-def read_msg_body_and_date(msg_path: Path) -> tuple[str, datetime | None]:
+def read_msg_body_and_date(msg_path: Path) -> tuple[str, datetime | None, str]:
     msg = extract_msg.Message(str(msg_path))
 
     # ✅ compatibility across extract_msg versions
@@ -38,7 +40,8 @@ def read_msg_body_and_date(msg_path: Path) -> tuple[str, datetime | None]:
 
     body = getattr(msg, "body", "") or ""
     sent_dt = getattr(msg, "date", None)  # often datetime, sometimes string/None
-    return body, sent_dt
+    subject = (getattr(msg, "subject", "") or "").strip()
+    return body, sent_dt, subject
 
 def to_local_time_str(dt: datetime | None) -> str:
     if dt is None:
@@ -51,6 +54,48 @@ def to_local_time_str(dt: datetime | None) -> str:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
+
+def to_local_date_str(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    try:
+        if ZoneInfo is not None and dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo(LOCAL_TZ))
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+def parse_subject_report_date(subject: str, fallback_dt: datetime | None = None) -> datetime | None:
+    s = normalize_text(subject or "")
+    if not s:
+        return None
+
+    m = re.search(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})(?!\d)", s)
+    if m:
+        d = int(m.group(1))
+        mo = int(m.group(2))
+        y_raw = m.group(3)
+        y = int(y_raw)
+        if len(y_raw) == 2:
+            y = 2000 + y if y <= 79 else 1900 + y
+        try:
+            return datetime(y, mo, d)
+        except Exception:
+            pass
+
+    m = re.search(r"(?<!\d)(\d{1,2})\s+([A-Za-z]{3,9})\.?(?:\s+(\d{4}))?(?!\d)", s)
+    if m:
+        d = int(m.group(1))
+        mon = m.group(2).lower()
+        y = int(m.group(3)) if m.group(3) else (fallback_dt.year if isinstance(fallback_dt, datetime) else datetime.now().year)
+        month = MONTH_MAP.get(mon)
+        if month:
+            try:
+                return datetime(y, month, d)
+            except Exception:
+                pass
+
+    return None
 
 
 # ----------------------------
@@ -235,7 +280,7 @@ def main():
     for msg_path in msg_files:
         scanned += 1
         try:
-            body, sent_dt = read_msg_body_and_date(msg_path)
+            body, sent_dt, subject = read_msg_body_and_date(msg_path)
             cells = extract_usg_cells(body)
             if not cells:
                 continue
@@ -245,7 +290,9 @@ def main():
                 continue
 
             matched += 1
-            sent_str = to_local_time_str(sent_dt)
+            sent_dt_obj = sent_dt if isinstance(sent_dt, datetime) else None
+            report_dt = parse_subject_report_date(subject, sent_dt_obj) or sent_dt_obj
+            sent_str = to_local_date_str(report_dt)
 
             for r in rows:
                 r["Broker"] = "Affinity"

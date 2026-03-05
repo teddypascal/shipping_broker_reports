@@ -24,6 +24,8 @@ BROKER = "BRS"
 LOCAL_TZ = "Asia/Singapore"
 
 MONTH_ABBR = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
+MONTH_MAP = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
+MONTH_MAP.update({m.lower(): i for i, m in enumerate(calendar.month_name) if m})
 
 
 # ----------------------------
@@ -73,7 +75,8 @@ def read_msg_body_and_date(msg_path: Path):
                 body = normalize_text(strip_html_tags(html)).strip()
 
             sent_dt = getattr(msg, "date", None)
-            return body, sent_dt
+            subject = (getattr(msg, "subject", "") or "").strip()
+            return body, sent_dt, subject
 
         except UnicodeDecodeError as e:
             last_err = e
@@ -101,6 +104,48 @@ def to_local_time_str(dt) -> str:
             return str(dt)
         except Exception:
             return ""
+
+def to_local_date_str(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    try:
+        if ZoneInfo and getattr(dt, "tzinfo", None) is not None:
+            dt = dt.astimezone(ZoneInfo(LOCAL_TZ))
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+def parse_subject_report_date(subject: str, fallback_dt: datetime | None = None) -> datetime | None:
+    s = normalize_text(subject or "")
+    if not s:
+        return None
+
+    m = re.search(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})(?!\d)", s)
+    if m:
+        d = int(m.group(1))
+        mo = int(m.group(2))
+        y_raw = m.group(3)
+        y = int(y_raw)
+        if len(y_raw) == 2:
+            y = 2000 + y if y <= 79 else 1900 + y
+        try:
+            return datetime(y, mo, d)
+        except Exception:
+            pass
+
+    m = re.search(r"(?<!\d)(\d{1,2})\s+([A-Za-z]{3,9})\.?(?:\s+(\d{4}))?(?!\d)", s)
+    if m:
+        d = int(m.group(1))
+        mon = m.group(2).lower()
+        y = int(m.group(3)) if m.group(3) else (fallback_dt.year if fallback_dt else datetime.now().year)
+        month = MONTH_MAP.get(mon)
+        if month:
+            try:
+                return datetime(y, month, d)
+            except Exception:
+                pass
+
+    return None
 
 
 # ----------------------------
@@ -253,17 +298,18 @@ def main():
     for msg_path in msg_files:
         scanned += 1
         try:
-            body, sent_dt = read_msg_body_and_date(msg_path)
+            body, sent_dt, subject = read_msg_body_and_date(msg_path)
             lines = extract_fixtures_lines(body)
             if not lines:
                 continue
 
             sent_dt_obj = sent_dt if isinstance(sent_dt, datetime) else None
-            sent_str = to_local_time_str(sent_dt_obj)
+            report_dt = parse_subject_report_date(subject, sent_dt_obj) or sent_dt_obj
+            sent_str = to_local_date_str(report_dt)
 
             any_parsed = False
             for ln in lines:
-                rec = parse_fixture_line(ln, sent_dt_obj)
+                rec = parse_fixture_line(ln, report_dt)
                 if not rec:
                     continue
                 any_parsed = True

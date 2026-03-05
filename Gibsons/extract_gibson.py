@@ -315,10 +315,10 @@ def main():
                 continue
 
             matched += 1
-            sent_str = to_local_time_str(sent_dt)
-            ref_year = (report_date.year if report_date else None) or (
-                datetime.strptime(sent_str[:10], "%Y-%m-%d").year if sent_str else datetime.now().year
-            )
+            sent_dt_obj = sent_dt if isinstance(sent_dt, datetime) else None
+            email_date = report_date or sent_dt_obj
+            sent_str = email_date.strftime("%Y-%m-%d") if email_date else ""
+            ref_year = report_date.year if report_date else (sent_dt_obj.year if sent_dt_obj else datetime.now().year)
 
             for r in rows:
                 r["Broker"] = BROKER_NAME
